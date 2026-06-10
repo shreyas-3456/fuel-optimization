@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fuel Route Planner</title>
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.9.0/dist/maplibre-gl.css">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <main class="app-shell">
+        <section class="panel" aria-label="Route controls">
+            <div>
+                <p class="eyebrow">MapLibre GL JS</p>
+                <h1>Fuel Route Planner</h1>
+            </div>
+
+            <form id="route-form" class="route-form">
+                <label>
+                    <span>Source</span>
+                    <input id="start-input" name="start" type="text" value="Chicago, IL" autocomplete="off">
+                </label>
+                <label>
+                    <span>Destination</span>
+                    <input id="finish-input" name="finish" type="text" value="Dallas, TX" autocomplete="off">
+                </label>
+                <button type="submit">Plan Route</button>
+            </form>
+            <button id="debug-toggle" class="debug-toggle" type="button" aria-pressed="false">Debug</button>
+
+            <div class="summary" aria-live="polite">
+                <div>
+                    <span>Distance</span>
+                    <strong id="distance">--</strong>
+                </div>
+                <div>
+                    <span>Fuel Cost</span>
+                    <strong id="cost">--</strong>
+                </div>
+                <div>
+                    <span>Stops</span>
+                    <strong id="stops">--</strong>
+                </div>
+            </div>
+
+            <p id="status" class="status">Type locations or drag the source and destination pins.</p>
+            <section class="fuel-stops" aria-label="Refueling stations">
+                <h2>Refueling Stations</h2>
+                <div id="fuel-stop-list" class="fuel-stop-list">
+                    <p class="empty-stops">Plan a route to see fuel stops.</p>
+                </div>
+            </section>
+            <pre id="result-json" class="result-json">{}</pre>
+        </section>
+
+        <section class="map-wrap" aria-label="Map">
+            <div id="map"></div>
+        </section>
+    </main>
+
+    <script src="https://unpkg.com/maplibre-gl@5.9.0/dist/maplibre-gl.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

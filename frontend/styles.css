@@ -1,0 +1,280 @@
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    background: #f2f3ef;
+    color: #1e241f;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.app-shell {
+    display: grid;
+    grid-template-columns: minmax(320px, 400px) 1fr;
+    min-height: 100%;
+}
+
+.panel {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding: 28px;
+    background: #ffffff;
+    border-right: 1px solid #d9ddd4;
+    overflow: auto;
+}
+
+.eyebrow {
+    margin: 0 0 6px;
+    color: #657066;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0;
+    text-transform: uppercase;
+}
+
+h1 {
+    margin: 0;
+    font-size: 30px;
+    line-height: 1.1;
+}
+
+.route-form {
+    display: grid;
+    gap: 14px;
+}
+
+label {
+    display: grid;
+    gap: 7px;
+    color: #4c564d;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+input {
+    width: 100%;
+    border: 1px solid #cfd6cc;
+    border-radius: 8px;
+    padding: 12px 13px;
+    color: #1e241f;
+    font: inherit;
+    outline: none;
+}
+
+input:focus {
+    border-color: #24745d;
+    box-shadow: 0 0 0 3px rgba(36, 116, 93, 0.14);
+}
+
+button {
+    border: 0;
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: #24745d;
+    color: #ffffff;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 800;
+}
+
+button:disabled {
+    cursor: wait;
+    opacity: 0.65;
+}
+
+.debug-toggle {
+    border: 1px solid #cfd6cc;
+    background: #f8faf6;
+    color: #344139;
+}
+
+.debug-toggle.is-active {
+    border-color: #2563eb;
+    background: #2563eb;
+    color: #ffffff;
+}
+
+.summary {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+}
+
+.summary div {
+    min-width: 0;
+    border: 1px solid #e0e5dd;
+    border-radius: 8px;
+    padding: 10px;
+    background: #f8faf6;
+}
+
+.summary span {
+    display: block;
+    color: #667066;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.summary strong {
+    display: block;
+    margin-top: 4px;
+    font-size: 16px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+}
+
+.status {
+    min-height: 42px;
+    margin: 0;
+    border-left: 4px solid #24745d;
+    padding: 10px 12px;
+    background: #edf5f0;
+    color: #344139;
+    line-height: 1.35;
+}
+
+.status.error {
+    border-color: #b3261e;
+    background: #fff1ef;
+    color: #7a1b16;
+}
+
+.fuel-stops {
+    display: grid;
+    gap: 10px;
+}
+
+.fuel-stops h2 {
+    margin: 0;
+    font-size: 16px;
+}
+
+.fuel-stop-list {
+    display: grid;
+    gap: 8px;
+    max-height: 260px;
+    overflow: auto;
+}
+
+.fuel-stop {
+    display: grid;
+    gap: 4px;
+    width: 100%;
+    border: 1px solid #e0e5dd;
+    border-left: 4px solid #d97706;
+    border-radius: 8px;
+    padding: 10px;
+    background: #fffaf0;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+
+.fuel-stop:hover {
+    border-color: #d97706;
+    background: #fff4d8;
+}
+
+.fuel-stop--nearby {
+    border-left-color: #2563eb;
+    background: #f4f7ff;
+}
+
+.fuel-stop--nearby:hover {
+    border-color: #2563eb;
+    background: #eaf0ff;
+}
+
+.fuel-stop strong {
+    color: #1e241f;
+    font-size: 14px;
+}
+
+.fuel-stop span {
+    color: #586158;
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+.fuel-stop .reason {
+    color: #1f3f7a;
+    font-weight: 700;
+}
+
+.empty-stops {
+    margin: 0;
+    color: #667066;
+    font-size: 13px;
+}
+
+.fuel-marker {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 2px solid #ffffff;
+    border-radius: 50%;
+    background: #d97706;
+    color: #ffffff;
+    box-shadow: 0 2px 8px rgba(30, 36, 31, 0.35);
+    font-size: 14px;
+    font-weight: 900;
+}
+
+.fuel-marker--nearby {
+    width: 24px;
+    height: 24px;
+    background: #2563eb;
+    font-size: 13px;
+}
+
+.result-json {
+    flex: 1;
+    min-height: 180px;
+    margin: 0;
+    border: 1px solid #e0e5dd;
+    border-radius: 8px;
+    padding: 12px;
+    background: #111815;
+    color: #d7f4e6;
+    font-size: 12px;
+    line-height: 1.45;
+    overflow: auto;
+}
+
+.map-wrap,
+#map {
+    min-height: 100vh;
+}
+
+.maplibregl-marker {
+    cursor: grab;
+}
+
+.maplibregl-marker:active {
+    cursor: grabbing;
+}
+
+@media (max-width: 820px) {
+    .app-shell {
+        grid-template-columns: 1fr;
+    }
+
+    .panel {
+        border-right: 0;
+        border-bottom: 1px solid #d9ddd4;
+    }
+
+    .map-wrap,
+    #map {
+        min-height: 58vh;
+    }
+}
