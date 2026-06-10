@@ -1,5 +1,6 @@
 from django.contrib.gis.db import models
 from django.contrib.gis.db.models.functions import Distance as GeoDistance
+from django.contrib.postgres.indexes import GistIndex
 
 
 class FuelStation(models.Model):
@@ -16,6 +17,7 @@ class FuelStation(models.Model):
         indexes = [
             models.Index(fields=['state']),
             models.Index(fields=['price']),
+            GistIndex(fields=['location'], name='core_fuelstation_location_gix'),
         ]
 
     def __str__(self):

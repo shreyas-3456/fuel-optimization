@@ -177,6 +177,7 @@ button:disabled {
     cursor: pointer;
     font: inherit;
     text-align: left;
+    user-select: text;
 }
 
 .fuel-stop:hover,
@@ -234,8 +235,17 @@ button:disabled {
     padding: 0;
     background: transparent;
     color: inherit;
+    cursor: pointer;
     font: inherit;
+    outline: none;
     text-align: left;
+    user-select: text;
+}
+
+.fuel-stop[role="button"]:focus-visible,
+.fuel-stop__main:focus-visible {
+    outline: 3px solid rgba(37, 99, 235, 0.28);
+    outline-offset: 2px;
 }
 
 .fuel-stop strong {

@@ -1,3 +1,4 @@
+import bisect
 import csv
 import math
 import re
@@ -7,14 +8,14 @@ from typing import Optional
 
 import requests
 from django.conf import settings
-from django.contrib.gis.geos import Point
+from django.contrib.gis.geos import Point, LineString
 from django.contrib.gis.measure import D
 
 from core.models import FuelStation as FuelStationModel
+from core.profiling import profiled, profile_step
 from django.contrib.gis.db.models.functions import Distance
 import logging
 log = logging.getLogger(__name__)
-log.info("hit")
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
@@ -156,29 +157,31 @@ def _geocode_text_location(location):
 
 
 def geocode_location(location):
-    coord = _parse_coordinate_location(location)
-    if coord:
-        return coord, 0
-    before = _geocode_text_location.cache_info().hits
-    resolved = _geocode_text_location(str(location).strip())
-    calls = 0 if _geocode_text_location.cache_info().hits > before else 1
-    return resolved, calls
+    with profile_step("geocode_location", location_type=type(location).__name__):
+        coord = _parse_coordinate_location(location)
+        if coord:
+            return coord, 0
+        before = _geocode_text_location.cache_info().hits
+        resolved = _geocode_text_location(str(location).strip())
+        calls = 0 if _geocode_text_location.cache_info().hits > before else 1
+        return resolved, calls
 
 def get_route(start, finish):
     _require_api_key()
-    response = requests.get(
-        'https://graphhopper.com/api/1/route',
-        params=[
-            ('point', f"{start['lat']},{start['lng']}"),
-            ('point', f"{finish['lat']},{finish['lng']}"),
-            ('vehicle', 'car'), ('locale', 'en'),
-            ('points_encoded', 'false'), ('instructions', 'true'),
-            ('calc_points', 'true'), ('key', settings.GRAPHHOPPER_API_KEY),
-        ],
-        timeout=12,
-    )
-    response.raise_for_status()
-    paths = response.json().get('paths', [])
+    with profile_step("graphhopper_route_request"):
+        response = requests.get(
+            'https://graphhopper.com/api/1/route',
+            params=[
+                ('point', f"{start['lat']},{start['lng']}"),
+                ('point', f"{finish['lat']},{finish['lng']}"),
+                ('vehicle', 'car'), ('locale', 'en'),
+                ('points_encoded', 'false'), ('instructions', 'true'),
+                ('calc_points', 'true'), ('key', settings.GRAPHHOPPER_API_KEY),
+            ],
+            timeout=12,
+        )
+        response.raise_for_status()
+        paths = response.json().get('paths', [])
     if not paths:
         raise RouteError('GraphHopper did not return a route.')
     path = paths[0]
@@ -210,6 +213,42 @@ def _haversine_miles(a, b):
     return 2 * R * math.asin(math.sqrt(h))
 
 
+def _build_cumulative_distances(coordinates: list) -> list[float]:
+    """Precompute cumulative haversine distance (miles) at each polyline vertex."""
+    cumdist = [0.0]
+    for prev, curr in zip(coordinates, coordinates[1:]):
+        cumdist.append(cumdist[-1] + _haversine_miles(prev, curr))
+    return cumdist
+
+
+def _point_at_mile_indexed(coordinates: list, cumdist: list[float], target_mile: float):
+    """
+    O(log N) lookup using precomputed cumulative distances + bisect.
+    Replaces the original O(N) _point_at_mile; compute cumdist once per route
+    via _build_cumulative_distances and pass it through everywhere.
+    """
+    if target_mile <= 0:
+        return coordinates[0]
+    if target_mile >= cumdist[-1]:
+        return coordinates[-1]
+
+    idx = bisect.bisect_right(cumdist, target_mile) - 1
+    idx = max(0, min(idx, len(coordinates) - 2))
+
+    seg_start, seg_end = cumdist[idx], cumdist[idx + 1]
+    seg = seg_end - seg_start
+    ratio = (target_mile - seg_start) / seg if seg else 0.0
+
+    prev, curr = coordinates[idx], coordinates[idx + 1]
+    return [
+        round(prev[0] + (curr[0] - prev[0]) * ratio, 6),
+        round(prev[1] + (curr[1] - prev[1]) * ratio, 6),
+    ]
+
+
+# Keep the original signature as a thin shim for any call sites not yet
+# updated to pass cumdist (e.g. _nearest_station callers). New internal
+# call sites all use _point_at_mile_indexed directly.
 def _point_at_mile(coordinates, target_mile):
     """Interpolate a [lon, lat] point at exactly target_mile along a polyline."""
     if target_mile <= 0:
@@ -257,60 +296,97 @@ def _estimate_road_miles(straight_line_miles: float) -> float:
 
 def _nearest_station(lon: float, lat: float) -> Optional[FuelStationModel]:
     pt = Point(lon, lat, srid=4326)
-    return (
-        FuelStationModel.objects
-        .filter(location__distance_lte=(pt, D(mi=SEARCH_RADIUS_MILES)))
-        .annotate(dist=Distance('location', pt))
-        .order_by('dist')
-        .first()
-    )
+    with profile_step("db_nearest_station"):
+        return (
+            FuelStationModel.objects
+            .filter(location__distance_lte=(pt, D(mi=SEARCH_RADIUS_MILES)))
+            .annotate(dist=Distance('location', pt))
+            .order_by('dist')
+            .first()
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Corridor candidate builder
+# Corridor candidate builder  (fix #1: single bulk spatial query)
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _all_corridor_stations(coordinates: list, distance_miles: float) -> list:
+    """
+    Single spatial query: fetch every station within DETOUR_SEARCH_RADIUS of
+    the route's full geometry, instead of one query per sample point.
+    Drops query count from O(distance / SAMPLE_INTERVAL_MILES) to 1.
+    """
+    with profile_step("db_all_corridor_stations", distance_miles=round(distance_miles, 2)):
+        route_line = LineString(coordinates, srid=4326)
+        return list(
+            FuelStationModel.objects
+            .filter(location__distance_lte=(route_line, D(mi=DETOUR_SEARCH_RADIUS)))
+            .annotate(dist_to_route=Distance('location', route_line, spheroid=True))
+            .order_by('price')
+        )
+
 
 def _candidate_stations_from_postgis(
     coordinates: list,
     distance_miles: float,
-) -> dict[float, list]:
+    cumdist: list[float],
+) -> tuple[dict[float, list], list]:
     """
-    Walk the polyline every SAMPLE_INTERVAL_MILES, query PostGIS ST_DWithin
-    at each sample point.  Returns {route_mile: [FuelStationModel, ...]} with
-    candidates sorted cheapest-first at each milepost.
+    Walk the polyline every SAMPLE_INTERVAL_MILES and bucket corridor stations
+    in Python (no per-sample DB round-trips).
+
+    Returns (candidate_map, all_stations):
+      candidate_map  — {route_mile: [FuelStationModel, ...]} cheapest-first
+      all_stations   — full corridor list for reuse in _detour_candidates_near
     """
-    candidates: dict[float, list] = {}
-    mile = 0.0
-    while mile <= distance_miles:
-        lon, lat = _point_at_mile(coordinates, mile)
-        pt = Point(lon, lat, srid=4326)
-        hits = list(
-            FuelStationModel.objects
-            .filter(location__distance_lte=(pt, D(mi=SEARCH_RADIUS_MILES)))
-            .order_by('price')[:CANDIDATES_PER_SAMPLE]
-        )
-        if hits:
-            candidates[round(mile, 1)] = hits
-        mile += SAMPLE_INTERVAL_MILES
-    return candidates
+    with profile_step("build_candidate_stations", distance_miles=round(distance_miles, 2)):
+        all_stations = _all_corridor_stations(coordinates, distance_miles)
+
+        candidates: dict[float, list] = {}
+        mile = 0.0
+        while mile <= distance_miles:
+            route_pt = _point_at_mile_indexed(coordinates, cumdist, mile)
+            nearby = sorted(
+                (
+                    s for s in all_stations
+                    if _haversine_miles(
+                        (route_pt[0], route_pt[1]),
+                        (s.location.x, s.location.y),
+                    ) <= SEARCH_RADIUS_MILES
+                ),
+                key=lambda s: s.price,
+            )[:CANDIDATES_PER_SAMPLE]
+            if nearby:
+                candidates[round(mile, 1)] = nearby
+            mile += SAMPLE_INTERVAL_MILES
+
+        return candidates, all_stations
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Detour candidates  (wider radius, price-sorted)
+# Detour candidates  (fix #1 continued: reuse all_stations, no extra queries)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _detour_candidates_near(
-    lon: float, lat: float, exclude_ids: frozenset
+    lon: float,
+    lat: float,
+    exclude_ids: frozenset,
+    all_stations: list,
 ) -> list:
-    """Stations within DETOUR_SEARCH_RADIUS sorted by price, excluding used ones."""
-    pt = Point(lon, lat, srid=4326)
-    return list(
-        FuelStationModel.objects
-        .filter(location__distance_lte=(pt, D(mi=DETOUR_SEARCH_RADIUS)))
-        .exclude(opis_id__in=exclude_ids)
-        .order_by('price')[:15]
-    )
-
+    """
+    Stations within DETOUR_SEARCH_RADIUS of the sample point, excluding already
+    seen ids. Distance-to-route classification happens in _build_dp_nodes using
+    db_station.dist_to_route.mi — no haversine filtering here.
+    """
+    pt_dist = lambda s: _haversine_miles((lon, lat), (s.location.x, s.location.y))
+    return sorted(
+        (
+            s for s in all_stations
+            if s.opis_id not in exclude_ids
+            and pt_dist(s) <= DETOUR_SEARCH_RADIUS
+        ),
+        key=lambda s: s.price,
+    )[:15]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DP node  (a candidate refuelling station on the route)
@@ -332,28 +408,17 @@ class DPNode:
 # ─────────────────────────────────────────────────────────────────────────────
 # DP graph builder
 # ─────────────────────────────────────────────────────────────────────────────
+
+@profiled("build_dp_nodes")
 def _build_dp_nodes(
     coordinates: list,
     distance_miles: float,
     candidate_map: dict,
+    all_stations: list,
     start_fuel: float,
+    cumdist: list[float],
 ) -> list[DPNode]:
-    """
-    Construct the ordered list of DPNodes:
-
-      [start_node]  +  [on-route stations]  +  [detour stations]  +  [end_node]
-
-    On-route stations come from the SEARCH_RADIUS_MILES corridor.
-    Detour stations come from a DETOUR_SEARCH_RADIUS sweep at every sample point.
-    We deduplicate: the same opis_id at an earlier sample point wins.
-
-    NOTE: "on-route" candidates are only found via a SEARCH_RADIUS_MILES (40 mi)
-    radius search around sampled route points — that does NOT mean they're
-    actually close to the route line. Anything beyond ON_ROUTE_THRESHOLD_MILES
-    from the sample point still gets treated as a detour, with detour
-    miles/cost computed the same way as the wider detour sweep.
-    """
-    ON_ROUTE_THRESHOLD_MILES = 5  # beyond this, treat as a detour even if found "on-route"
+    ON_ROUTE_THRESHOLD_MILES = 5
 
     seen_ids: set[str] = set()
     nodes: list[DPNode] = []
@@ -369,8 +434,23 @@ def _build_dp_nodes(
 
     sorted_miles = sorted(candidate_map.keys())
 
+    # Precompute for every sample mile: the cheapest on-route price
+    # reachable within the next MAX_RANGE_MILES / 2 miles.
+    # Built once here so the detour sweep loop doesn't recompute it each iteration.
+    lookahead_miles = MAX_RANGE_MILES / 2  # 250 miles at current constants
+    best_reachable_price_at: dict[float, float] = {}
     for mile in sorted_miles:
-        route_pt = _point_at_mile(coordinates, mile)
+        prices = [
+            float(s.price)
+            for m, stations in candidate_map.items()
+            if mile <= m <= mile + lookahead_miles
+            for s in stations
+            if s.dist_to_route.mi <= ON_ROUTE_THRESHOLD_MILES
+        ]
+        best_reachable_price_at[mile] = min(prices) if prices else float('inf')
+
+    for mile in sorted_miles:
+        route_pt = _point_at_mile_indexed(coordinates, cumdist, mile)
         on_route_stations = candidate_map[mile]
 
         # ── On-route candidates ───────────────────────────────────────────────
@@ -379,16 +459,10 @@ def _build_dp_nodes(
                 continue
             seen_ids.add(db_station.opis_id)
 
-            s_lon = db_station.location.x
-            s_lat = db_station.location.y
-            one_way_haversine = _haversine_miles(
-                (route_pt[0], route_pt[1]), (s_lon, s_lat)
-            )
+            dist_to_route_miles = db_station.dist_to_route.mi
 
-            if one_way_haversine > ON_ROUTE_THRESHOLD_MILES:
-                # Found within SEARCH_RADIUS_MILES of the sample point, but
-                # still meaningfully off the route — treat as a detour.
-                one_way_road = _estimate_road_miles(one_way_haversine)
+            if dist_to_route_miles > ON_ROUTE_THRESHOLD_MILES:
+                one_way_road = _estimate_road_miles(dist_to_route_miles)
                 round_trip_road = one_way_road * 2
                 detour_fuel_cost = (round_trip_road / MILES_PER_GALLON) * float(db_station.price)
 
@@ -412,39 +486,50 @@ def _build_dp_nodes(
                     is_detour=False,
                 ))
 
-        # ── Detour candidates (wider sweep) ───────────────────────────────────
-        best_on_route_price = (
-            min(float(s.price) for s in on_route_stations)
-            if on_route_stations else float('inf')
-        )
+        # ── Detour candidates (wider sweep, in-memory) ────────────────────────
+        # Use the forward-looking best price: cheapest on-route station
+        # reachable from this mile within half a tank. A detour that's not
+        # cheaper than what's coming up on-route is never worth taking.
+        best_reachable_price = best_reachable_price_at[mile]
 
         for db_station in _detour_candidates_near(
-            route_pt[0], route_pt[1], frozenset(seen_ids)
+            route_pt[0], route_pt[1], frozenset(seen_ids), all_stations
         ):
             if db_station.opis_id in seen_ids:
                 continue
+
+            dist_to_route_miles = db_station.dist_to_route.mi
+
+            # Close to route — treat as on-route regardless of price
+            if dist_to_route_miles <= ON_ROUTE_THRESHOLD_MILES:
+                seen_ids.add(db_station.opis_id)
+                nodes.append(DPNode(
+                    node_id=db_station.opis_id,
+                    route_mile=mile,
+                    point=route_pt,
+                    station=db_station,
+                    price=float(db_station.price),
+                    is_detour=False,
+                    detour_miles=0.0,
+                    detour_fuel_cost=0.0,
+                ))
+                continue
+
+            # True detour — must be cheaper than anything reachable on-route
             price = float(db_station.price)
-            if price >= best_on_route_price:
-                # No point paying for a detour to a station that's not cheaper
+            if price >= best_reachable_price:
+                continue
+            if dist_to_route_miles > MAX_DETOUR_ONE_WAY_MILES:
                 continue
 
-            s_lon = db_station.location.x
-            s_lat = db_station.location.y
-            one_way_haversine = _haversine_miles(
-                (route_pt[0], route_pt[1]), (s_lon, s_lat)
-            )
-            if one_way_haversine > MAX_DETOUR_ONE_WAY_MILES:
-                continue
-
-            # Round-trip road estimate (no extra API calls)
-            one_way_road = _estimate_road_miles(one_way_haversine)
+            one_way_road = _estimate_road_miles(dist_to_route_miles)
             round_trip_road = one_way_road * 2
             detour_fuel_cost = (round_trip_road / MILES_PER_GALLON) * price
 
             seen_ids.add(db_station.opis_id)
             nodes.append(DPNode(
                 node_id=db_station.opis_id,
-                route_mile=mile,          # anchored at the sample point where found
+                route_mile=mile,
                 point=route_pt,
                 station=db_station,
                 price=price,
@@ -469,10 +554,30 @@ def _build_dp_nodes(
 # Dijkstra / DP over (node, fuel) states
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _snap_fuel(gallons: float) -> float:
-    """Round fuel to nearest FUEL_STEP_GALLONS to keep state space discrete."""
-    return round(round(gallons / FUEL_STEP_GALLONS) * FUEL_STEP_GALLONS, 1)
+def _snap_fuel(gallons: float, mode: str = 'nearest') -> float:
+    """
+    Round fuel to FUEL_STEP_GALLONS increments.
 
+    mode='nearest' — general bucketing (default; used for DP state keys and
+                     exact quantities like TANK_CAPACITY)
+    mode='ceil'    — for fuel CONSUMED / REQUIRED — never underestimate need
+    mode='floor'   — for fuel REMAINING after a leg — never overestimate range
+
+    The directional modes guard against the discretization stranding a driver:
+    overestimating consumption is safe (may stop slightly earlier than needed),
+    but underestimating range could leave the tank empty before the next stop.
+    """
+    steps = gallons / FUEL_STEP_GALLONS
+    if mode == 'ceil':
+        steps = math.ceil(steps - 1e-9)   # epsilon guards float artifacts
+    elif mode == 'floor':
+        steps = math.floor(steps + 1e-9)
+    else:
+        steps = round(steps)
+    return round(steps * FUEL_STEP_GALLONS, 1)
+
+
+@profiled("dp_optimal_stops")
 def _dp_optimal_stops(nodes: list[DPNode], start_fuel: float) -> list[dict]:
     import heapq
 
@@ -513,6 +618,7 @@ def _dp_optimal_stops(nodes: list[DPNode], start_fuel: float) -> list[dict]:
 
             total_drive   = route_segment + node_j.detour_miles
             fuel_consumed = total_drive / MILES_PER_GALLON
+            fuel_consumed = _snap_fuel(fuel_consumed, mode='ceil')   # never underestimate what's burned
 
             if fuel_consumed > f:
                 continue  # detour pushes it over — skip this node, keep scanning
@@ -521,7 +627,7 @@ def _dp_optimal_stops(nodes: list[DPNode], start_fuel: float) -> list[dict]:
 
             # ── End node — no purchase needed ─────────────────────────────────
             if node_j.node_id == '__end__':
-                new_f  = _snap_fuel(fuel_after)
+                new_f  = _snap_fuel(fuel_after, mode='floor')        # never overestimate what's left
                 state  = (j, new_f)
                 if cost < dist.get(state, INF):
                     dist[state] = cost
@@ -530,10 +636,11 @@ def _dp_optimal_stops(nodes: list[DPNode], start_fuel: float) -> list[dict]:
                 continue
 
             # ── Refuel stop — fill to max ─────────────────────────────────────
+            fuel_after      = _snap_fuel(fuel_after, mode='floor')   # never overestimate what's left
             gallons_bought  = max(0.0, TANK_CAPACITY - fuel_after)
             edge_cost       = gallons_bought * node_j.price + node_j.detour_fuel_cost
             new_cost        = cost + edge_cost
-            new_f           = _snap_fuel(TANK_CAPACITY)
+            new_f           = _snap_fuel(TANK_CAPACITY)              # exact; mode='nearest' is fine
             state           = (j, new_f)
 
             if new_cost < dist.get(state, INF):
@@ -576,7 +683,7 @@ def _make_stop_record(
     fuel_consumed_to_reach: float,
     gallons_bought: float,
     prev_node_idx: int,
-    miles_from_prev: float,      # ← new: actual drive miles from previous stop
+    miles_from_prev: float,      # ← actual drive miles from previous stop
 ) -> dict:
     lon, lat = node.point
     gallons_bought   = round(gallons_bought, 4)
@@ -682,6 +789,7 @@ def _debug_station_record(node: DPNode, stops: list[dict], total_cost: float) ->
     return record
 
 
+@profiled("debug_station_records")
 def _debug_station_records(nodes: list[DPNode], stops: list[dict], total_cost: float) -> list[dict]:
     records = [
         record
@@ -705,69 +813,74 @@ def select_fuel_stops(
     start_mode: str = START_MODE_NEAREST,
     start_fuel: float = START_FUEL_FIXED_GALLONS,   # ← accept it as a parameter
 ) -> tuple[list, int, list]:
-    distance  = route['distance_miles']
-    coords    = route['coordinates']
-    extra_api = 0
+    with profile_step("select_fuel_stops", start_mode=start_mode):
+        distance  = route['distance_miles']
+        coords    = route['coordinates']
+        extra_api = 0
 
-    # ── Determine opening fuel level ─────────────────────────────────────────
-    if start_mode == START_MODE_NEAREST:
-        first_station = _nearest_station(start['lng'], start['lat'])
-        if first_station is None:
-            # No nearby station — fall back to whatever fuel the user has
-            prefix_stop = None
+        # ── Precompute cumulative distances once for the whole route ──────────────
+        cumdist = _build_cumulative_distances(coords)
+
+        # ── Determine opening fuel level ─────────────────────────────────────────
+        if start_mode == START_MODE_NEAREST:
+            first_station = _nearest_station(start['lng'], start['lat'])
+            if first_station is None:
+                # No nearby station — fall back to whatever fuel the user has
+                prefix_stop = None
+            else:
+                start_fuel = TANK_CAPACITY   # fill up at the nearest station first
+                s_lon = first_station.location.x
+                s_lat = first_station.location.y
+                haversine_to_first = _haversine_miles(
+                    (start['lng'], start['lat']), (s_lon, s_lat)
+                )
+                road_to_first     = _estimate_road_miles(haversine_to_first)
+                gallons_for_first = TANK_CAPACITY
+                prefix_stop = {
+                    'sequence':        1,
+                    'route_mile':      0.0,
+                    'miles_from_prev': round(road_to_first, 2),
+                    'gallons':         round(gallons_for_first, 4),
+                    'fuel_cost':       round(gallons_for_first * float(first_station.price), 2),
+                    'map_marker':      {'lat': s_lat, 'lng': s_lon},
+                    'is_detour':       False,
+                    'note':            'nearest station at trip start',
+                    'station': {
+                        'opis_id':          first_station.opis_id,
+                        'name':             first_station.name,
+                        'address':          first_station.address,
+                        'city':             first_station.city,
+                        'state':            first_station.state,
+                        'price_per_gallon': float(first_station.price),
+                    },
+                }
         else:
-            start_fuel = TANK_CAPACITY   # fill up at the nearest station first
-            s_lon = first_station.location.x
-            s_lat = first_station.location.y
-            haversine_to_first = _haversine_miles(
-                (start['lng'], start['lat']), (s_lon, s_lat)
-            )
-            road_to_first     = _estimate_road_miles(haversine_to_first)
-            gallons_for_first = TANK_CAPACITY
-            prefix_stop = {
-                'sequence':        1,
-                'route_mile':      0.0,
-                'miles_from_prev': round(road_to_first, 2),
-                'gallons':         round(gallons_for_first, 4),
-                'fuel_cost':       round(gallons_for_first * float(first_station.price), 2),
-                'map_marker':      {'lat': s_lat, 'lng': s_lon},
-                'is_detour':       False,
-                'note':            'nearest station at trip start',
-                'station': {
-                    'opis_id':          first_station.opis_id,
-                    'name':             first_station.name,
-                    'address':          first_station.address,
-                    'city':             first_station.city,
-                    'state':            first_station.state,
-                    'price_per_gallon': float(first_station.price),
-                },
-            }
-    else:
-        # START_MODE_PARTIAL — use exactly what was passed in (user-supplied gallons)
-        prefix_stop = None
+            # START_MODE_PARTIAL — use exactly what was passed in (user-supplied gallons)
+            prefix_stop = None
 
-    # ── Build candidate graph ─────────────────────────────────────────────────
-    candidate_map = _candidate_stations_from_postgis(coords, distance)
-    dp_nodes      = _build_dp_nodes(coords, distance, candidate_map, start_fuel)
+        # ── Build candidate graph ─────────────────────────────────────────────────
+        # Single bulk DB query; all subsequent filtering is in-memory.
+        candidate_map, all_stations = _candidate_stations_from_postgis(coords, distance, cumdist)
+        dp_nodes = _build_dp_nodes(coords, distance, candidate_map, all_stations, start_fuel, cumdist)
 
-    # ── Run DP optimizer ──────────────────────────────────────────────────────
-    stops = _dp_optimal_stops(dp_nodes, start_fuel)
+        # ── Run DP optimizer ──────────────────────────────────────────────────────
+        stops = _dp_optimal_stops(dp_nodes, start_fuel)
 
-    log.info(
-        "start_mode=%s  start_fuel=%.2f gal  max_first_stop_mile=%.0f  first_stop_mile=%s",
-        start_mode,
-        start_fuel,                                          # ← actual value, not constant
-        start_fuel * MILES_PER_GALLON,                       # ← shows the range limit clearly
-        stops[0]['route_mile'] if stops else 'NO STOPS',
-    )
+        log.info(
+            "start_mode=%s  start_fuel=%.2f gal  max_first_stop_mile=%.0f  first_stop_mile=%s",
+            start_mode,
+            start_fuel,                                          # ← actual value, not constant
+            start_fuel * MILES_PER_GALLON,                       # ← shows the range limit clearly
+            stops[0]['route_mile'] if stops else 'NO STOPS',
+        )
 
-    # ── Prepend the nearest-station prefix stop if applicable ─────────────────
-    if prefix_stop is not None:
-        for stop in stops:
-            stop['sequence'] += 1
-        stops.insert(0, prefix_stop)
+        # ── Prepend the nearest-station prefix stop if applicable ─────────────────
+        if prefix_stop is not None:
+            for stop in stops:
+                stop['sequence'] += 1
+            stops.insert(0, prefix_stop)
 
-    return stops, extra_api, dp_nodes
+        return stops, extra_api, dp_nodes
 
 def _extract_state_codes(*values):
     codes = set()
@@ -792,6 +905,7 @@ def _is_usa(location):
 # plan_trip  — public API
 # ─────────────────────────────────────────────────────────────────────────────
 
+@profiled("plan_trip")
 def plan_trip(
     start_location,
     finish_location,

@@ -389,10 +389,11 @@ function createFuelStopListItem(stop, marker, stationKey) {
     const station = stop.station;
     const routePlace = formatRouteLocation(stop.route_location);
     const detourHtml = state.debug ? detourStopHtml(stop) : '';
-    const item = document.createElement('button');
-    item.type = 'button';
+    const item = document.createElement('div');
     item.className = 'fuel-stop';
     item.dataset.stationKey = stationKey;
+    item.setAttribute('role', 'button');
+    item.tabIndex = 0;
     item.innerHTML = `
         <strong>${escapeHtml(stop.sequence + '. ' + station.name)}</strong>
         <span>Refuel near ${escapeHtml(routePlace)}</span>
@@ -400,7 +401,7 @@ function createFuelStopListItem(stop, marker, stationKey) {
         <span>${escapeHtml(station.address)} · mile ${stop.route_mile.toLocaleString()} · ${stop.gallons} gal · $${stop.fuel_cost.toFixed(2)}</span>
         ${detourHtml}
     `;
-    item.addEventListener('click', () => {
+    addSelectableStationActivation(item, () => {
         selectFuelStation(stationKey, marker, [stop.map_marker.lng, stop.map_marker.lat], item, 8);
     });
     return item;
@@ -413,17 +414,17 @@ function createDebugGasStationListItem(stationOption, marker, stationKey) {
     item.className = `fuel-stop fuel-stop--nearby${stationOption.is_selected ? ' fuel-stop--debug-selected' : ''}`;
     item.dataset.stationKey = stationKey;
     item.innerHTML = `
-        <button class="fuel-stop__main" type="button">
+        <div class="fuel-stop__main" role="button" tabindex="0">
             <span class="fuel-stop__kicker">${escapeHtml(stationOption.is_selected ? 'Selected station' : 'Candidate station')} · route mile ${formatNumber(stationOption.route_mile)}</span>
             <strong>${escapeHtml(station.name)}</strong>
             <span>${escapeHtml(station.address)}</span>
             <span>${escapeHtml(station.city)}, ${escapeHtml(station.state)} · $${station.price_per_gallon.toFixed(3)}/gal</span>
-        </button>
+        </div>
         ${computedHtml}
         ${stationOption.reason ? `<span class="reason">${escapeHtml(stationOption.reason)}</span>` : ''}
         <button class="station-breakdown-button" type="button">Complete breakdown</button>
     `;
-    item.querySelector('.fuel-stop__main').addEventListener('click', () => {
+    addSelectableStationActivation(item.querySelector('.fuel-stop__main'), () => {
         const markerLngLat = getMarkerLngLat(stationOption);
         selectFuelStation(stationKey, marker, markerLngLat, item, 9);
     });
@@ -431,6 +432,25 @@ function createDebugGasStationListItem(stationOption, marker, stationKey) {
         openStationBreakdown(stationOption);
     });
     return item;
+}
+
+function addSelectableStationActivation(element, activate) {
+    element.addEventListener('click', () => {
+        if (!hasSelectedText()) {
+            activate();
+        }
+    });
+    element.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') {
+            return;
+        }
+        event.preventDefault();
+        activate();
+    });
+}
+
+function hasSelectedText() {
+    return window.getSelection()?.toString().trim().length > 0;
 }
 
 function selectFuelStation(stationKey, marker, center, item, zoom, options = {}) {

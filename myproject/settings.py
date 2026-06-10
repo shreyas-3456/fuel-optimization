@@ -33,9 +33,11 @@ ALLOWED_HOSTS = ['*']
 INSTALLED_APPS = [
     'core',
     'django.contrib.gis',
+    'django.contrib.postgres'
 ]
 
 MIDDLEWARE = [
+    'core.profiling.ProfilingMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -73,11 +75,31 @@ FUEL_PRICE_CSV = BASE_DIR / 'fuel-prices-for-be-assessment (1).csv'
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'formatters': {
+        'plain': {
+            'format': '%(asctime)s %(levelname)s %(name)s %(message)s',
+        },
+    },
     'handlers': {
-        'console': {'class': 'logging.StreamHandler'},
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'plain',
+        },
     },
     'root': {
         'handlers': ['console'],
         'level': 'WARNING',
+    },
+    'loggers': {
+        'core.profiler': {
+            'handlers': ['console'],
+            'level': os.environ.get('PROFILER_LOG_LEVEL', 'INFO'),
+            'propagate': False,
+        },
+        'core.routing': {
+            'handlers': ['console'],
+            'level': os.environ.get('ROUTING_LOG_LEVEL', 'INFO'),
+            'propagate': False,
+        },
     },
 }
