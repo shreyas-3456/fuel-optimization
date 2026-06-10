@@ -24,6 +24,10 @@
                     <span>Destination</span>
                     <input id="finish-input" name="finish" type="text" value="Dallas, TX" autocomplete="off">
                 </label>
+                <label>
+                    <span>Starting fuel (gallons)</span>
+                    <input id="start-fuel-input" name="start_fuel_gallons" type="number" min="0" max="50" step="0.5" value="5" inputmode="decimal">
+                </label>
                 <button type="submit">Plan Route</button>
             </form>
             <button id="debug-toggle" class="debug-toggle" type="button" aria-pressed="false">Debug</button>
@@ -44,19 +48,46 @@
             </div>
 
             <p id="status" class="status">Type locations or drag the source and destination pins.</p>
-            <section class="fuel-stops" aria-label="Refueling stations">
-                <h2>Refueling Stations</h2>
-                <div id="fuel-stop-list" class="fuel-stop-list">
-                    <p class="empty-stops">Plan a route to see fuel stops.</p>
-                </div>
-            </section>
-            <pre id="result-json" class="result-json">{}</pre>
         </section>
 
         <section class="map-wrap" aria-label="Map">
             <div id="map"></div>
+            <button id="station-drawer-toggle" class="station-drawer-toggle" type="button" aria-controls="station-drawer" aria-expanded="false">
+                Stops <span id="station-drawer-toggle-count">0</span>
+            </button>
+            <aside id="station-drawer" class="station-drawer" aria-label="Refueling stations">
+                <div class="station-drawer__header">
+                    <div>
+                        <p class="eyebrow">Route Stops</p>
+                        <h2>Refueling Stations</h2>
+                    </div>
+                    <span id="station-drawer-count" class="station-drawer__count">0</span>
+                </div>
+                <div id="fuel-stop-list" class="fuel-stop-list">
+                    <p class="empty-stops">Plan a route to see fuel stops.</p>
+                </div>
+            </aside>
         </section>
     </main>
+
+    <dialog id="station-breakdown-modal" class="station-modal" aria-labelledby="station-breakdown-title">
+        <div class="station-modal__header">
+            <div>
+                <p class="eyebrow">Fuel Cost Breakdown</p>
+                <h2 id="station-breakdown-title">Station details</h2>
+            </div>
+            <button id="station-breakdown-close" class="station-modal__close" type="button" aria-label="Close breakdown">&times;</button>
+        </div>
+        <div id="station-breakdown-content" class="station-modal__content"></div>
+    </dialog>
+
+    <details class="debug-drawer">
+        <summary>
+            <span>JSON</span>
+            <button id="debug-json-close" class="debug-drawer__close" type="button" aria-label="Close debug JSON">&times;</button>
+        </summary>
+        <pre id="result-json" class="result-json" tabindex="0">{}</pre>
+    </details>
 
     <script src="https://unpkg.com/maplibre-gl@5.9.0/dist/maplibre-gl.js"></script>
     <script src="app.js"></script>
