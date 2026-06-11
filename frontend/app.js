@@ -389,6 +389,9 @@ function createFuelStopListItem(stop, marker, stationKey) {
     const station = stop.station;
     const routePlace = formatRouteLocation(stop.route_location);
     const detourHtml = state.debug ? detourStopHtml(stop) : '';
+    const distanceTraveled = getDistanceTraveled(stop);
+    const milesRemaining = getMilesRemaining(stop);
+    const gallonsToFill = getGallonsToFill(stop);
     const item = document.createElement('div');
     item.className = 'fuel-stop';
     item.dataset.stationKey = stationKey;
@@ -397,8 +400,30 @@ function createFuelStopListItem(stop, marker, stationKey) {
     item.innerHTML = `
         <strong>${escapeHtml(stop.sequence + '. ' + station.name)}</strong>
         <span>Refuel near ${escapeHtml(routePlace)}</span>
-        <span>${escapeHtml(station.city)}, ${escapeHtml(station.state)} - $${station.price_per_gallon.toFixed(3)}/gal</span>
-        <span>${escapeHtml(station.address)} · mile ${stop.route_mile.toLocaleString()} · ${stop.gallons} gal · $${stop.fuel_cost.toFixed(2)}</span>
+        <span>${escapeHtml(station.city)}, ${escapeHtml(station.state)}</span>
+        <span>${escapeHtml(station.address)}</span>
+        <dl class="fuel-stop-metrics" aria-label="Fuel stop details">
+            <div class="fuel-stop-metrics__primary">
+                <dt>Gas price</dt>
+                <dd>${escapeHtml(formatPricePerGallon(station.price_per_gallon))}</dd>
+            </div>
+            <div>
+                <dt>Gas taken</dt>
+                <dd>${escapeHtml(formatGasTaken(gallonsToFill))}</dd>
+            </div>
+            <div>
+                <dt>Stop cost</dt>
+                <dd>${escapeHtml(formatMoney(stop.fuel_cost))}</dd>
+            </div>
+            <div>
+                <dt>Traveled</dt>
+                <dd>${escapeHtml(distanceTraveled === null ? 'Unknown' : formatMiles(distanceTraveled))}</dd>
+            </div>
+            <div>
+                <dt>Remaining</dt>
+                <dd>${escapeHtml(milesRemaining === null ? 'Unknown' : formatMiles(milesRemaining))}</dd>
+            </div>
+        </dl>
         ${detourHtml}
     `;
     addSelectableStationActivation(item, () => {
@@ -410,12 +435,13 @@ function createFuelStopListItem(stop, marker, stationKey) {
 function createDebugGasStationListItem(stationOption, marker, stationKey) {
     const station = stationOption.station;
     const computedHtml = debugGasStationSummaryHtml(stationOption);
+    const distanceTraveled = getDistanceTraveled(stationOption);
     const item = document.createElement('div');
     item.className = `fuel-stop fuel-stop--nearby${stationOption.is_selected ? ' fuel-stop--debug-selected' : ''}`;
     item.dataset.stationKey = stationKey;
     item.innerHTML = `
         <div class="fuel-stop__main" role="button" tabindex="0">
-            <span class="fuel-stop__kicker">${escapeHtml(stationOption.is_selected ? 'Selected station' : 'Candidate station')} · route mile ${formatNumber(stationOption.route_mile)}</span>
+            <span class="fuel-stop__kicker">${escapeHtml(stationOption.is_selected ? 'Selected station' : 'Candidate station')} · ${formatRouteProgressLabel(distanceTraveled)}</span>
             <strong>${escapeHtml(station.name)}</strong>
             <span>${escapeHtml(station.address)}</span>
             <span>${escapeHtml(station.city)}, ${escapeHtml(station.state)} · $${station.price_per_gallon.toFixed(3)}/gal</span>
@@ -517,24 +543,49 @@ function setStationDrawerOpen(isOpen) {
 }
 
 function selectedStopKey(stop) {
-    return `selected-${stop.sequence}-${stop.station.name}-${stop.route_mile}`;
+    return `selected-${stop.sequence}-${stop.station.name}-${getDistanceTraveled(stop)}`;
 }
 
 function debugStationKey(stationOption) {
-    return `debug-${stationOption.station.name}-${stationOption.route_mile}-${stationOption.station.address}`;
+    return `debug-${stationOption.station.name}-${getDistanceTraveled(stationOption)}-${stationOption.station.address}`;
 }
 
 function fuelStopPopupHtml(stop) {
     const station = stop.station;
     const routePlace = formatRouteLocation(stop.route_location);
-    const detourHtml = stop.detour ? `<br>${detourPopupHtml(stop)}` : '';
+    const detourHtml = stop.detour ? detourPopupHtml(stop) : '';
+    const distanceTraveled = getDistanceTraveled(stop);
+    const gallonsToFill = getGallonsToFill(stop);
+    const milesRemaining = getMilesRemaining(stop);
     return `
-        <strong>Refuel near ${escapeHtml(routePlace)}</strong><br>
-        <strong>${escapeHtml(station.name)}</strong><br>
-        ${escapeHtml(station.address)}<br>
-        ${escapeHtml(station.city)}, ${escapeHtml(station.state)}<br>
-        $${station.price_per_gallon.toFixed(3)}/gal<br>
-        Route mile ${stop.route_mile.toLocaleString()}
+        <div class="station-popup">
+            <strong>Refuel near ${escapeHtml(routePlace)}</strong>
+            <strong>${escapeHtml(station.name)}</strong>
+            <span>${escapeHtml(station.address)}</span>
+            <span>${escapeHtml(station.city)}, ${escapeHtml(station.state)}</span>
+            <dl class="station-popup__costs">
+                <div>
+                    <dt>Gas price</dt>
+                    <dd>${escapeHtml(formatPricePerGallon(station.price_per_gallon))}</dd>
+                </div>
+                <div>
+                    <dt>Gas taken</dt>
+                    <dd>${escapeHtml(formatGasTaken(gallonsToFill))}</dd>
+                </div>
+                <div>
+                    <dt>Stop cost</dt>
+                    <dd>${escapeHtml(formatMoney(stop.fuel_cost))}</dd>
+                </div>
+                <div>
+                    <dt>Traveled</dt>
+                    <dd>${escapeHtml(distanceTraveled === null ? 'Unknown' : formatMiles(distanceTraveled))}</dd>
+                </div>
+                <div>
+                    <dt>Remaining</dt>
+                    <dd>${escapeHtml(milesRemaining === null ? 'Unknown' : formatMiles(milesRemaining))}</dd>
+                </div>
+            </dl>
+        </div>
         ${detourHtml}
     `;
 }
@@ -547,7 +598,7 @@ function debugGasStationPopupHtml(stationOption) {
             <strong>${escapeHtml(station.name)}</strong>
             <span>${escapeHtml(station.address)}</span>
             <span>${escapeHtml(station.city)}, ${escapeHtml(station.state)}</span>
-            <span><bold>$${station.price_per_gallon.toFixed(3)}/gal · route mile ${formatNumber(stationOption.route_mile)}</bold></span>
+            <span><strong>$${station.price_per_gallon.toFixed(3)}/gal · ${escapeHtml(formatRouteProgressLabel(getDistanceTraveled(stationOption)))}</strong></span>
             ${debugGasStationPopupComputedHtml(stationOption)}
             ${stationOption.reason ? `<span class="station-popup__note">${escapeHtml(stationOption.reason)}</span>` : ''}
         </div>
@@ -619,11 +670,23 @@ function debugGasStationSummaryHtml(stationOption) {
 
 function debugGasStationDetailRows(stationOption) {
     const rows = [];
-    if (stationOption.gallons_if_chosen !== undefined) {
-        rows.push({ label: 'Gallons if chosen', value: `${formatGallons(stationOption.gallons_if_chosen)} gal` });
+    const distanceTraveled = getDistanceTraveled(stationOption);
+    const milesRemaining = getMilesRemaining(stationOption);
+    const gallonsToFill = getGallonsToFill(stationOption);
+
+    if (distanceTraveled !== null) {
+        rows.push({ label: 'Distance traveled', value: formatMiles(distanceTraveled) });
+    }
+    if (milesRemaining !== null) {
+        rows.push({ label: 'Miles remaining', value: formatMiles(milesRemaining) });
+    }
+    if (gallonsToFill !== null) {
+        rows.push({ label: 'Gallons to fill', value: `${formatGallons(gallonsToFill)} gal` });
     }
     if (stationOption.fuel_cost_if_chosen !== undefined) {
         rows.push({ label: 'Stop cost', value: formatMoney(stationOption.fuel_cost_if_chosen) });
+    } else if (stationOption.fuel_cost !== undefined) {
+        rows.push({ label: 'Stop cost', value: formatMoney(stationOption.fuel_cost) });
     }
     if (stationOption.total_fuel_cost_if_chosen !== undefined) {
         rows.push({
@@ -688,7 +751,6 @@ function openStationBreakdown(stationOption) {
         { label: 'Station', value: station.name },
         { label: 'Address', value: `${station.address}, ${station.city}, ${station.state}` },
         { label: 'Fuel price', value: `$${station.price_per_gallon.toFixed(3)}/gal` },
-        { label: 'Route mile', value: formatNumber(stationOption.route_mile) },
         ...debugGasStationDetailRows(stationOption),
         ...debugGasStationDetourRows(stationOption),
     ];
@@ -763,6 +825,29 @@ function formatRouteLocation(routeLocation) {
     ].filter(Boolean).join(', ') || 'route point';
 }
 
+function getDistanceTraveled(item) {
+    return finiteOrNull(item.distance_traveled ?? item.route_mile);
+}
+
+function getMilesRemaining(item) {
+    return finiteOrNull(item.miles_remaining);
+}
+
+function getGallonsToFill(item) {
+    return finiteOrNull(
+        item.gallons_to_fill
+        ?? item.gallons
+        ?? item.gallons_if_chosen
+    );
+}
+
+function formatRouteProgressLabel(distanceTraveled) {
+    if (distanceTraveled === null) {
+        return 'route position unknown';
+    }
+    return `${formatMiles(distanceTraveled)} traveled`;
+}
+
 function clearFuelStopMarkers() {
     state.fuelStopMarkers.forEach((marker) => marker.remove());
     state.fuelStopMarkers = [];
@@ -803,6 +888,11 @@ function numberOrZero(value) {
     return Number.isFinite(number) ? number : 0;
 }
 
+function finiteOrNull(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+}
+
 function formatMoney(value) {
     return `$${numberOrZero(value).toFixed(2)}`;
 }
@@ -817,6 +907,17 @@ function formatGallons(value) {
     return numberOrZero(value).toLocaleString(undefined, {
         maximumFractionDigits: 1,
     });
+}
+
+function formatGasTaken(value) {
+    if (value === null) {
+        return 'Unknown';
+    }
+    return `${formatGallons(value)} gal`;
+}
+
+function formatPricePerGallon(value) {
+    return `$${numberOrZero(value).toFixed(3)}/gal`;
 }
 
 function formatNumber(value) {

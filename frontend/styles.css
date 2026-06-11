@@ -276,6 +276,50 @@ button:disabled {
     font-weight: 700;
 }
 
+.fuel-stop-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    margin: 2px 0 0;
+}
+
+.fuel-stop-metrics div {
+    min-width: 0;
+    border: 1px solid rgba(217, 119, 6, 0.22);
+    border-radius: 6px;
+    padding: 7px 8px;
+    background: rgba(255, 255, 255, 0.7);
+}
+
+.fuel-stop-metrics dt {
+    color: #7a3b12;
+    font-size: 10px;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
+.fuel-stop-metrics dd {
+    margin: 2px 0 0;
+    color: #1e241f;
+    font-size: 13px;
+    font-weight: 900;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+}
+
+.fuel-stop-metrics__primary {
+    border-color: rgba(36, 116, 93, 0.28);
+    background: #edf5f0;
+}
+
+.fuel-stop-metrics__primary dt {
+    color: #1f6b55;
+}
+
+.fuel-stop-metrics__primary dd {
+    color: #174f40;
+}
+
 .station-cost-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -724,6 +768,10 @@ button:disabled {
     }
 
     .station-cost-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .fuel-stop-metrics {
         grid-template-columns: 1fr;
     }
 
