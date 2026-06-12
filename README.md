@@ -24,54 +24,7 @@ On macOS with Homebrew:
 brew install python@3.12 gdal docker
 ```
 
-## Quick Start
-
-```bash
-./start.sh
-```
-
-The script does the following in order:
-
-1. Creates `.env` with local defaults if one does not already exist.
-2. Creates `.venv/` at the project root if it does not already exist.
-3. Installs / updates `requirements.txt` inside the venv.
-4. Detects your `docker-compose.yml`, starts the Docker daemon if it is not running, then runs `docker compose up -d` (skipped if containers are already up).
-5. Runs Django migrations.
-6. Checks whether `core_fuelstation` is empty; if so, imports `fuel-prices-for-be-assessment (1).csv` automatically.
-7. Starts Django at `http://127.0.0.1:8000` (background, logs to `logs/django.log`).
-8. Starts the frontend at `http://127.0.0.1:3000` (background, logs to `logs/frontend.log`).
-9. Runs health checks against both ports and prints a summary.
-
-Open `http://127.0.0.1:3000` in a browser.
-
-To stop the servers:
-
-```bash
-kill $(cat logs/django.pid) $(cat logs/frontend.pid)
-```
-
-PostGIS and Redis are left running so data is preserved between starts. Stop them with:
-
-```bash
-docker compose down
-```
-
-### Optional port overrides
-
-```bash
-DJANGO_PORT=8001 FRONTEND_PORT=3001 ./start.sh
-```
-
-### Custom CSV path
-
-By default the import command looks for `fuel-prices-for-be-assessment (1).csv` in the project root. Override with:
-
-
-
-## Manual Setup
-
-Use these commands if you prefer not to use `start.sh`:
-
+## Setup
 ```bash
 docker compose up -d
 python3.12 -m venv .venv
@@ -140,8 +93,3 @@ The service reads `fuel-prices-for-be-assessment (1).csv` at import time and sto
 
 Results are cached in `geocode_cache.json` and reused on subsequent imports.
 
-## Tests
-
-```bash
-python manage.py test
-```
