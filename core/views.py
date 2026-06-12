@@ -54,11 +54,9 @@ def api_route_fuel(request):
             }, status=400))
 
         # ── start_fuel_gallons ────────────────────────────────────────────────────
-        # Only relevant when start_mode == 'partial_tank'.
-        # Accepts either 'start_fuel_gallons' or legacy 'start_fuel' key.
         start_fuel_gallons = None
         if start_mode == START_MODE_PARTIAL:
-            raw = payload.get('start_fuel_gallons') or payload.get('start_fuel')
+            raw = payload.get('start_fuel_gallons')
             if raw is not None:
                 try:
                     start_fuel_gallons = float(raw)
@@ -75,6 +73,11 @@ def api_route_fuel(request):
                         )
                     }, status=400))
 
+        # ── stop_analysis ─────────────────────────────────────────────────────────
+        # Debug API call disabled. (Decoupling approach is complex and flawed better approach is just create a new graph for each  debug point append or replace  TODO later )
+        # stop_analysis = request.GET.get('stop_analysis', 'false').lower() == 'true'
+        stop_analysis = False
+
     try:
         with profile_step("api_route_fuel.plan_trip_call"):
             result = plan_trip(
@@ -82,6 +85,7 @@ def api_route_fuel(request):
                 finish,
                 start_mode=start_mode,
                 start_fuel_gallons=start_fuel_gallons,
+                stop_analysis=stop_analysis,
             )
         return _cors_response(JsonResponse(result))
     except RouteError as exc:

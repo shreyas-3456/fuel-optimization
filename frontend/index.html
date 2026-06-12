@@ -30,7 +30,7 @@
                 </label>
                 <button type="submit">Plan Route</button>
             </form>
-            <button id="debug-toggle" class="debug-toggle" type="button" aria-pressed="false">Debug</button>
+            <!-- <button id="debug-toggle" class="debug-toggle" type="button" aria-pressed="false">Debug</button> -->
 
             <div class="summary" aria-live="polite">
                 <div>
@@ -46,6 +46,11 @@
                     <strong id="stops">--</strong>
                 </div>
             </div>
+
+            <section id="total-cost-breakdown" class="total-cost-breakdown" aria-label="Total fuel cost breakdown" hidden>
+                <p class="eyebrow">Cost Breakdown</p>
+                <p id="total-cost-breakdown-text"></p>
+            </section>
 
             <p id="status" class="status">Type locations or drag the source and destination pins.</p>
         </section>
@@ -90,6 +95,6 @@
     </details>
 
     <script src="https://unpkg.com/maplibre-gl@5.9.0/dist/maplibre-gl.js"></script>
-    <script src="app.js"></script>
+    <script src="app.js?v=start-fuel-gallons-only"></script>
 </body>
 </html>

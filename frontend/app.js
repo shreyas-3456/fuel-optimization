@@ -8,6 +8,8 @@ const statusEl = document.querySelector('#status');
 const distanceEl = document.querySelector('#distance');
 const costEl = document.querySelector('#cost');
 const stopsEl = document.querySelector('#stops');
+const totalCostBreakdown = document.querySelector('#total-cost-breakdown');
+const totalCostBreakdownText = document.querySelector('#total-cost-breakdown-text');
 const mapWrap = document.querySelector('.map-wrap');
 const fuelStopList = document.querySelector('#fuel-stop-list');
 const stationDrawer = document.querySelector('#station-drawer');
@@ -111,15 +113,23 @@ form.addEventListener('submit', (event) => {
     planRoute();
 });
 
-debugToggle.addEventListener('click', () => {
-    state.debug = !state.debug;
-    debugToggle.setAttribute('aria-pressed', String(state.debug));
-    debugToggle.classList.toggle('is-active', state.debug);
-    renderFuelStops(state.fuelStops, state.debugGasStations);
-    if (state.routePayload) {
-        setStatus(routeStatusMessage(state.routePayload, state.fuelStops, state.debugGasStations));
-    }
-});
+// Debug button disabled.
+// debugToggle.addEventListener('click', () => {
+//     state.debug = !state.debug;
+//     debugToggle.setAttribute('aria-pressed', String(state.debug));
+//     debugToggle.classList.toggle('is-active', state.debug);
+//
+//     // Debug API call disabled.
+//     // if (state.debug && !state.debugGasStations.length) {
+//     //     planRoute();
+//     //     return;
+//     // }
+//
+//     renderFuelStops(state.fuelStops, state.debugGasStations);
+//     if (state.routePayload) {
+//         setStatus(routeStatusMessage(state.routePayload, state.fuelStops, state.debugGasStations));
+//     }
+// });
 
 stationDrawerToggle.addEventListener('click', () => {
     setStationDrawerOpen(!state.stationDrawerOpen);
@@ -185,14 +195,13 @@ async function planRoute() {
     state.startFuelGallons = startFuelGallons;
 
     try {
-        const response = await fetch(API_URL, {
+        const response = await fetch(routeApiUrl(), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 start_location: startLocation,
                 finish_location: finishLocation,
                 start_mode: 'partial_tank',
-                start_fuel: startFuelGallons,
                 start_fuel_gallons: startFuelGallons,
             }),
         });
@@ -206,6 +215,15 @@ async function planRoute() {
     } finally {
         setLoading(false);
     }
+}
+
+function routeApiUrl() {
+    const url = new URL(API_URL);
+    // Debug API call disabled.
+    // if (state.debug) {
+    //     url.searchParams.set('stop_analysis', 'true');
+    // }
+    return url.toString();
 }
 
 function getLocationPayload(input, useCoordinates, point) {
@@ -265,16 +283,18 @@ function renderRoute(payload) {
     state.totalFuelCost = payload.total_fuel_cost || 0;
     state.routePayload = payload;
 
+    renderTotalCostBreakdown(payload.total_fuel_cost_breakdown);
     renderFuelStops(validStops, debugGasStations);
     resultJson.textContent = JSON.stringify({
         start: payload.start,
         finish: payload.finish,
         start_config: payload.start_config || {
             mode: 'partial_tank',
-            start_fuel: state.startFuelGallons,
+            start_fuel_gallons: state.startFuelGallons,
         },
         vehicle: payload.vehicle,
         total_fuel_cost: payload.total_fuel_cost,
+        total_fuel_cost_breakdown: payload.total_fuel_cost_breakdown,
         detour_summary: payload.detour_summary,
         fuel_stops: validStops,
         debug_gas_stations: debugGasStations,
@@ -282,12 +302,22 @@ function renderRoute(payload) {
     setStatus(routeStatusMessage(payload, validStops, debugGasStations));
 }
 
+function renderTotalCostBreakdown(breakdown) {
+    const text = typeof breakdown === 'string' ? breakdown.trim() : '';
+    totalCostBreakdown.hidden = !text;
+    totalCostBreakdownText.textContent = text;
+}
+
 function collectDebugGasStations(payload) {
-    return payload.debug_gas_stations
-        || payload.debug_stations
-        || payload.candidate_stations
-        || payload.nearby_stations
+    return arrayOrNull(payload.debug_gas_stations)
+        || arrayOrNull(payload.debug_stations)
+        || arrayOrNull(payload.candidate_stations)
+        || arrayOrNull(payload.nearby_stations)
         || [];
+}
+
+function arrayOrNull(value) {
+    return Array.isArray(value) ? value : null;
 }
 
 function renderFuelStops(fuelStops, debugGasStations = []) {
@@ -331,7 +361,8 @@ function renderFuelStops(fuelStops, debugGasStations = []) {
             return;
         }
         const stationKey = debugStationKey(stationOption);
-        const marker = createFuelStopMarker(stationOption, stationOption.is_selected ? 'debug-selected' : 'nearby')
+        const markerVariant = debugStationMarkerVariant(stationOption);
+        const marker = createFuelStopMarker(stationOption, markerVariant)
             .setLngLat(markerLngLat)
             .setPopup(new maplibregl.Popup({ offset: 18 }).setHTML(debugGasStationPopupHtml(stationOption)))
             .addTo(map);
@@ -347,13 +378,8 @@ function renderFuelStops(fuelStops, debugGasStations = []) {
 }
 
 function routeStatusMessage(payload, fuelStops, debugGasStations) {
-    const startFuel = payload.start_config?.start_fuel_gallons
-        ?? payload.start_config?.start_fuel
-        ?? state.startFuelGallons;
-    const debugDetails = state.debug
-        ? ` Debug maps ${debugGasStations.length} gas stations with computed cost details.`
-        : ' Toggle Debug to map all gas station candidates and computed costs.';
-    return `Route ready: ${payload.start.name} to ${payload.finish.name}. Starting with ${formatGallons(startFuel)} gal and showing ${fuelStops.length} selected stops.${debugDetails}`;
+    const startFuel = payload.start_config?.start_fuel_gallons ?? state.startFuelGallons;
+    return `Route ready: ${payload.start.name} to ${payload.finish.name}. Starting with ${formatGallons(startFuel)} gal and showing ${fuelStops.length} selected stops.`;
 }
 
 function createFuelStopMarker(stop, variant) {
@@ -371,6 +397,9 @@ function markerText(stop, variant) {
     if (variant === 'debug-selected') {
         return '*';
     }
+    if (variant === 'rejected') {
+        return '!';
+    }
     return '$';
 }
 
@@ -378,10 +407,14 @@ function markerTitle(stop, variant) {
     if (variant === 'selected') {
         return `Fuel stop ${stop.sequence}: ${stop.station.name}`;
     }
-    const total = stop.total_fuel_cost_if_chosen !== undefined
+    const total = hasFiniteNumber(stop.total_fuel_cost_if_chosen)
         ? ` - total if chosen ${formatMoney(stop.total_fuel_cost_if_chosen)}`
         : '';
-    const prefix = variant === 'debug-selected' ? 'Selected gas station' : 'Gas station candidate';
+    const prefix = variant === 'debug-selected'
+        ? 'Selected gas station'
+        : variant === 'rejected'
+            ? 'Rejected gas station candidate'
+            : 'Gas station candidate';
     return `${prefix}: ${stop.station.name}${total}`;
 }
 
@@ -436,18 +469,20 @@ function createDebugGasStationListItem(stationOption, marker, stationKey) {
     const station = stationOption.station;
     const computedHtml = debugGasStationSummaryHtml(stationOption);
     const distanceTraveled = getDistanceTraveled(stationOption);
+    const statusLabel = debugStationStatusLabel(stationOption);
+    const reason = debugStationReason(stationOption);
     const item = document.createElement('div');
-    item.className = `fuel-stop fuel-stop--nearby${stationOption.is_selected ? ' fuel-stop--debug-selected' : ''}`;
+    item.className = `fuel-stop ${debugStationListClasses(stationOption)}`;
     item.dataset.stationKey = stationKey;
     item.innerHTML = `
         <div class="fuel-stop__main" role="button" tabindex="0">
-            <span class="fuel-stop__kicker">${escapeHtml(stationOption.is_selected ? 'Selected station' : 'Candidate station')} · ${formatRouteProgressLabel(distanceTraveled)}</span>
+            <span class="fuel-stop__kicker">${escapeHtml(statusLabel)} · ${formatRouteProgressLabel(distanceTraveled)}</span>
             <strong>${escapeHtml(station.name)}</strong>
             <span>${escapeHtml(station.address)}</span>
             <span>${escapeHtml(station.city)}, ${escapeHtml(station.state)} · $${station.price_per_gallon.toFixed(3)}/gal</span>
         </div>
         ${computedHtml}
-        ${stationOption.reason ? `<span class="reason">${escapeHtml(stationOption.reason)}</span>` : ''}
+        ${reason ? `<span class="reason">${escapeHtml(reason)}</span>` : ''}
         <button class="station-breakdown-button" type="button">Complete breakdown</button>
     `;
     addSelectableStationActivation(item.querySelector('.fuel-stop__main'), () => {
@@ -592,15 +627,16 @@ function fuelStopPopupHtml(stop) {
 
 function debugGasStationPopupHtml(stationOption) {
     const station = stationOption.station;
+    const reason = debugStationReason(stationOption);
     return `
         <div class="station-popup">
-            <strong>${escapeHtml(stationOption.is_selected ? 'Selected gas station' : 'Gas station candidate')}</strong>
+            <strong>${escapeHtml(debugStationStatusLabel(stationOption))}</strong>
             <strong>${escapeHtml(station.name)}</strong>
             <span>${escapeHtml(station.address)}</span>
             <span>${escapeHtml(station.city)}, ${escapeHtml(station.state)}</span>
             <span><strong>$${station.price_per_gallon.toFixed(3)}/gal · ${escapeHtml(formatRouteProgressLabel(getDistanceTraveled(stationOption)))}</strong></span>
             ${debugGasStationPopupComputedHtml(stationOption)}
-            ${stationOption.reason ? `<span class="station-popup__note">${escapeHtml(stationOption.reason)}</span>` : ''}
+            ${reason ? `<span class="station-popup__note">${escapeHtml(reason)}</span>` : ''}
         </div>
     `;
 }
@@ -609,6 +645,8 @@ function createDebugSummaryItem(fuelStops, debugGasStations) {
     const details = summarizeDetours(fuelStops);
     const selectedStations = debugGasStations.filter((station) => station.is_selected).length;
     const detourCandidates = debugGasStations.filter((station) => station.is_detour).length;
+    const feasibleStations = debugGasStations.filter((station) => station.is_feasible === true).length;
+    const rejectedStations = debugGasStations.filter(isRejectedDebugStation).length;
     const item = document.createElement('div');
     item.className = 'debug-summary';
     item.innerHTML = `
@@ -617,6 +655,8 @@ function createDebugSummaryItem(fuelStops, debugGasStations) {
         <span>Gas stations mapped: ${debugGasStations.length}</span>
         <span>Selected gas stations in debug set: ${selectedStations}</span>
         <span>Detour candidates in debug set: ${detourCandidates}</span>
+        <span>Feasible candidates: ${feasibleStations}</span>
+        <span>Rejected candidates: ${rejectedStations}</span>
         <span>Detours selected: ${details.count}</span>
         <span>Total detour road miles: ${formatMiles(details.roadMiles)}</span>
         <span>Detour fuel cost added to total: ${formatMoney(details.fuelCost)}</span>
@@ -683,18 +723,21 @@ function debugGasStationDetailRows(stationOption) {
     if (gallonsToFill !== null) {
         rows.push({ label: 'Gallons to fill', value: `${formatGallons(gallonsToFill)} gal` });
     }
-    if (stationOption.fuel_cost_if_chosen !== undefined) {
+    if (hasFiniteNumber(stationOption.fuel_cost_if_chosen)) {
         rows.push({ label: 'Stop cost', value: formatMoney(stationOption.fuel_cost_if_chosen) });
-    } else if (stationOption.fuel_cost !== undefined) {
+    } else if (hasFiniteNumber(stationOption.fuel_cost)) {
         rows.push({ label: 'Stop cost', value: formatMoney(stationOption.fuel_cost) });
     }
-    if (stationOption.total_fuel_cost_if_chosen !== undefined) {
+    if (hasFiniteNumber(stationOption.total_fuel_cost_if_chosen)) {
+        const delta = hasFiniteNumber(stationOption.delta_total_fuel_cost)
+            ? ` (${formatDeltaMoney(stationOption.delta_total_fuel_cost)})`
+            : '';
         rows.push({
             label: 'Trip total',
-            value: `${formatMoney(stationOption.total_fuel_cost_if_chosen)} (${formatDeltaMoney(stationOption.delta_total_fuel_cost)})`,
+            value: `${formatMoney(stationOption.total_fuel_cost_if_chosen)}${delta}`,
         });
     }
-    if (stationOption.compared_stop_sequence !== undefined && stationOption.compared_stop_sequence !== null) {
+    if (stationOption.compared_stop_sequence !== undefined && stationOption.compared_stop_sequence !== null && hasFiniteNumber(stationOption.compared_stop_cost)) {
         rows.push({
             label: `Compared with stop ${stationOption.compared_stop_sequence}`,
             value: formatMoney(stationOption.compared_stop_cost),
@@ -716,13 +759,13 @@ function debugGasStationDetourRows(stationOption) {
     const oneWayMiles = stationOption.one_way_road_miles ?? detour.one_way_road_miles;
     const detourFuelCost = stationOption.detour_fuel_cost ?? detour.detour_fuel_cost;
 
-    if (roundTripMiles !== undefined) {
+    if (hasFiniteNumber(roundTripMiles)) {
         rows.push({ label: 'Detour round trip', value: formatMiles(roundTripMiles) });
     }
-    if (oneWayMiles !== undefined) {
+    if (hasFiniteNumber(oneWayMiles)) {
         rows.push({ label: 'Detour one way', value: formatMiles(oneWayMiles) });
     }
-    if (detourFuelCost !== undefined) {
+    if (hasFiniteNumber(detourFuelCost)) {
         rows.push({ label: 'Detour fuel cost', value: formatMoney(detourFuelCost) });
     }
     return rows;
@@ -747,17 +790,20 @@ function debugGasStationPopupComputedHtml(stationOption) {
 
 function openStationBreakdown(stationOption) {
     const station = stationOption.station;
+    const reason = debugStationReason(stationOption);
     const rows = [
         { label: 'Station', value: station.name },
         { label: 'Address', value: `${station.address}, ${station.city}, ${station.state}` },
         { label: 'Fuel price', value: `$${station.price_per_gallon.toFixed(3)}/gal` },
+        { label: 'Status', value: debugStationStatusLabel(stationOption) },
         ...debugGasStationDetailRows(stationOption),
         ...debugGasStationDetourRows(stationOption),
+        ...debugGasStationStopAnalysisRows(stationOption),
     ];
 
     stationBreakdownContent.innerHTML = `
         <section class="station-modal__summary">
-            <strong>${escapeHtml(stationOption.is_selected ? 'Selected gas station' : 'Gas station candidate')}</strong>
+            <strong>${escapeHtml(debugStationStatusLabel(stationOption))}</strong>
             <span>${escapeHtml(station.name)}</span>
         </section>
         <dl class="station-breakdown-list">
@@ -768,9 +814,114 @@ function openStationBreakdown(stationOption) {
                 </div>
             `).join('')}
         </dl>
-        ${stationOption.reason ? `<p class="station-modal__note">${escapeHtml(stationOption.reason)}</p>` : ''}
+        ${reason ? `<p class="station-modal__note">${escapeHtml(reason)}</p>` : ''}
     `;
     stationBreakdownModal.showModal();
+}
+
+function debugGasStationStopAnalysisRows(stationOption) {
+    const analysis = stationOption.stop_analysis;
+    if (!analysis) {
+        return [];
+    }
+
+    const rows = [];
+    if (analysis.available === false) {
+        rows.push({
+            label: 'Stop analysis',
+            value: analysis.reason ? `Rejected: ${analysis.reason}` : 'Rejected',
+        });
+    }
+    if (analysis.cheapest) {
+        rows.push({ label: 'Cheapest option', value: capitalize(analysis.cheapest) });
+    }
+    ['replace', 'append'].forEach((key) => {
+        const option = analysis[key];
+        if (!option) {
+            return;
+        }
+        const label = capitalize(key);
+        if (!option.available) {
+            rows.push({ label, value: option.reason ? `Not available: ${option.reason}` : 'Not available' });
+            return;
+        }
+        if (!hasFiniteNumber(option.total_cost)) {
+            rows.push({ label, value: 'Available' });
+            return;
+        }
+        const deltaValue = option.cost_delta ?? (
+            hasFiniteNumber(option.cost_delta_raw) ? formatDeltaMoney(option.cost_delta_raw) : ''
+        );
+        const delta = deltaValue ? ` (${deltaValue})` : '';
+        rows.push({ label, value: `${formatMoney(option.total_cost)}${delta}` });
+        if (option.cost_breakdown) {
+            rows.push({ label: `${label} breakdown`, value: option.cost_breakdown });
+        }
+        if (Array.isArray(option.stops) && option.stops.length) {
+            rows.push({ label: `${label} stops`, value: formatAnalysisStops(option.stops) });
+        }
+    });
+    return rows;
+}
+
+function debugStationMarkerVariant(stationOption) {
+    if (stationOption.is_selected) {
+        return 'debug-selected';
+    }
+    if (isRejectedDebugStation(stationOption)) {
+        return 'rejected';
+    }
+    return 'nearby';
+}
+
+function debugStationListClasses(stationOption) {
+    if (stationOption.is_selected) {
+        return 'fuel-stop--debug-selected';
+    }
+    if (isRejectedDebugStation(stationOption)) {
+        return 'fuel-stop--rejected';
+    }
+    return 'fuel-stop--nearby';
+}
+
+function debugStationStatusLabel(stationOption) {
+    if (stationOption.is_selected) {
+        return 'Selected station';
+    }
+    if (stationOption.is_unreachable) {
+        return 'Unreachable candidate';
+    }
+    if (isRejectedDebugStation(stationOption)) {
+        return 'Rejected candidate';
+    }
+    if (stationOption.is_feasible === true) {
+        return 'Feasible candidate';
+    }
+    return 'Candidate station';
+}
+
+function isRejectedDebugStation(stationOption) {
+    return stationOption.is_feasible === false
+        || stationOption.is_unreachable === true
+        || stationOption.stop_analysis?.available === false;
+}
+
+function debugStationReason(stationOption) {
+    return stationOption.infeasible_reason
+        || stationOption.reason
+        || stationOption.stop_analysis?.reason
+        || '';
+}
+
+function formatAnalysisStops(stops) {
+    return stops.map((stop) => {
+        const candidate = stop.is_candidate ? ' this' : '';
+        const gallons = hasFiniteNumber(stop.gallons_bought)
+            ? `${formatGallons(stop.gallons_bought)} gal`
+            : 'unknown gallons';
+        const cost = hasFiniteNumber(stop.fuel_cost) ? formatMoney(stop.fuel_cost) : 'unknown cost';
+        return `${stop.label || 'Stop'}${candidate} [${stop.name || 'Unknown'}]: ${gallons}, ${cost}`;
+    }).join(' + ');
 }
 
 function nearbyDetourText(stationOption) {
@@ -848,6 +999,10 @@ function formatRouteProgressLabel(distanceTraveled) {
     return `${formatMiles(distanceTraveled)} traveled`;
 }
 
+function capitalize(value) {
+    return String(value).charAt(0).toUpperCase() + String(value).slice(1);
+}
+
 function clearFuelStopMarkers() {
     state.fuelStopMarkers.forEach((marker) => marker.remove());
     state.fuelStopMarkers = [];
@@ -891,6 +1046,13 @@ function numberOrZero(value) {
 function finiteOrNull(value) {
     const number = Number(value);
     return Number.isFinite(number) ? number : null;
+}
+
+function hasFiniteNumber(value) {
+    if (value === null || value === undefined || value === '') {
+        return false;
+    }
+    return Number.isFinite(Number(value));
 }
 
 function formatMoney(value) {
