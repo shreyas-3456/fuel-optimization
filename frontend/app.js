@@ -1,4 +1,4 @@
-const API_URL = `http://route-fuel-shreyas.duckdns.org/api/route-fuel/`;
+const API_URL = `https://route-fuel-shreyas.duckdns.org/api/route-fuel/`;
 
 const startInput = document.querySelector('#start-input');
 const finishInput = document.querySelector('#finish-input');
